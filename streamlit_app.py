@@ -6,79 +6,75 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from google_auth_oauthlib.flow import Flow
 
-# ---------- Google OAuth helpers ----------
+# ---------- OAuth setup ----------
 SCOPES = ["https://www.googleapis.com/auth/calendar.events"]
 CLIENT_ID     = st.secrets["google"]["client_id"]
 CLIENT_SECRET = st.secrets["google"]["client_secret"]
 REDIRECT_URI  = st.secrets["google"]["redirect_uri"]  # e.g. "https://your-app.streamlit.app/"
 
 def get_flow():
-    return Flow(
-        client_config={
+    flow = Flow.from_client_config(
+        {
             "web": {
                 "client_id": CLIENT_ID,
                 "client_secret": CLIENT_SECRET,
                 "auth_uri": "https://accounts.google.com/o/oauth2/auth",
                 "token_uri": "https://oauth2.googleapis.com/token",
-                "redirect_uris": [REDIRECT_URI]
+                "redirect_uris": [REDIRECT_URI],
             }
         },
         scopes=SCOPES,
-        redirect_uri=REDIRECT_URI,
     )
+    flow.redirect_uri = REDIRECT_URI
+    return flow
 
 def login():
     if "creds" in st.session_state:
         return True
-    query_params = st.experimental_get_query_params()
+    query_params = st.query_params
     if "code" in query_params:
         flow = get_flow()
         flow.fetch_token(code=query_params["code"][0])
-        st.session_state["creds"] = flow.credentials_to_dict()
-        st.experimental_set_query_params()          # clean url
+        st.session_state["creds"] = {
+            "token": flow.credentials.token,
+            "refresh_token": flow.credentials.refresh_token,
+            "token_uri": flow.credentials.token_uri,
+            "client_id": flow.credentials.client_id,
+            "client_secret": flow.credentials.client_secret,
+            "scopes": flow.credentials.scopes,
+        }
+        st.query_params.clear()  # Clean the URL
         return True
     auth_url, _ = get_flow().authorization_url(
-        access_type="offline",
-        prompt="consent", include_granted_scopes="true")
+        access_type="offline", prompt="consent", include_granted_scopes="true")
     st.markdown(f"[**Sign in with Google**]({auth_url})", unsafe_allow_html=True)
     return False
-
-def flow_credentials_to_dict(flow_creds):
-    return {
-        "token": flow_creds.token,
-        "refresh_token": flow_creds.refresh_token,
-        "token_uri": flow_creds.token_uri,
-        "client_id": flow_creds.client_id,
-        "client_secret": flow_creds.client_secret,
-        "scopes": flow_creds.scopes,
-    }
 
 def creds_from_dict(data):
     return Credentials(**data)
 
-# ---------- PDF → shifts ----------
+# ---------- PDF parser ----------
 def parse_pdf(file_bytes):
     shifts = []
     with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
-        year = re.search(r"(\d{4})", pdf.metadata.get("Title","2025")).group(1)  # fallback 2025
+        year = re.search(r"(\d{4})", pdf.metadata.get("Title", "2025")).group(1)
         for page in pdf.pages:
             table = page.extract_table()
             if not table:
                 continue
             df = pd.DataFrame(table[1:], columns=table[0])
-            # find Entrada / Sortida rows (sometimes repeated)
             if "Entrada" not in df.columns or "Sortida" not in df.columns:
                 continue
-            for col in df.columns[1:]:                      # first column is day number
-                day_str = str(df.at[0, col]).strip()
+            for col in df.columns[1:]:
+                day_str = str(df.iloc[0][col]).strip()
                 if not day_str.isdigit():
                     continue
                 try:
                     date = dt.date(int(year), page.page_number, int(day_str))
                 except ValueError:
                     continue
-                start = str(df.at[df["Entrada"] == "Entrada"].iat[0, df.columns.get_loc(col)]).strip()
-                end   = str(df.at[df["Sortida"] == "Sortida"].iat[0, df.columns.get_loc(col)]).strip()
+                start = str(df.loc[df["Entrada"] == "Entrada"][col].values[0]).strip()
+                end   = str(df.loc[df["Sortida"] == "Sortida"][col].values[0]).strip()
                 if re.fullmatch(r"\d{1,2}:\d{2}", start) and re.fullmatch(r"\d{1,2}:\d{2}", end):
                     key = f"{date:%Y%m%d}-{start.replace(':','')}"
                     shifts.append({"key": key, "date": date.isoformat(), "start": start, "end": end})
@@ -107,16 +103,16 @@ def sync_shifts(creds, shifts, tz="Europe/Madrid"):
             "extendedProperties": {"private": {"shiftUploader": "1", "key": s["key"]}},
         }
 
-        if s["key"] in by_key:                     # update
+        if s["key"] in by_key:
             ev_id = by_key[s["key"]]["id"]
             service.events().patch(calendarId="primary", eventId=ev_id, body=body).execute()
             updates += 1
             del by_key[s["key"]]
-        else:                                      # insert
+        else:
             service.events().insert(calendarId="primary", body=body).execute()
             inserts += 1
 
-    for ev in by_key.values():                     # delete removed shifts
+    for ev in by_key.values():
         service.events().delete(calendarId="primary", eventId=ev["id"]).execute()
         deletes += 1
 
@@ -130,16 +126,16 @@ if login():
     creds = creds_from_dict(st.session_state["creds"])
     st.success("Signed in!")
 
-    file = st.file_uploader("Upload the roster PDF", type="pdf")
+    file = st.file_uploader("Upload your PDF schedule", type="pdf")
     if file:
-        with st.spinner("Parsing…"):
+        with st.spinner("Reading PDF..."):
             shifts = parse_pdf(file.read())
         if not shifts:
-            st.error("No shifts found. Are ENTRADA/SORTIDA columns present?")
+            st.error("No shifts found. Check if ENTRADA/SORTIDA columns are correctly labeled.")
         else:
-            st.info(f"Detected **{len(shifts)}** shifts. Preview below:")
-            st.dataframe(pd.DataFrame(shifts).head(20), hide_index=True)
+            st.info(f"Found **{len(shifts)}** shifts. Preview:")
+            st.dataframe(pd.DataFrame(shifts), use_container_width=True)
             if st.button("Sync to Google Calendar"):
-                with st.spinner("Syncing…"):
+                with st.spinner("Syncing..."):
                     ins, upd, dele = sync_shifts(creds, shifts)
-                st.success(f"Inserted {ins}, updated {upd}, deleted {dele} events ✅")
+                st.success(f"✅ Inserted: {ins}, Updated: {upd}, Deleted: {dele}")
