@@ -5,21 +5,21 @@ from dateutil.parser import parse as dtparse
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from google_auth_oauthlib.flow import Flow
-from googleapiclient.errors import HttpError # Import HttpError for better API error handling
-import traceback # To print full tracebacks in logs
+from googleapiclient.errors import HttpError
+import traceback
 
 # --- Configuration (Read from Streamlit Secrets) ---
 # IMPORTANT: Ensure your .streamlit/secrets.toml looks like this:
 # [google]
 # client_id = "YOUR_GOOGLE_CLIENT_ID"
 # client_secret = "YOUR_GOOGLE_CLIENT_SECRET"
-# redirect_uri = "https://makecalendar.streamlit.app" # NO TRAILING SLASH HERE, unless you want it
+# redirect_uri = "https://makecalendar.streamlit.app" # NO TRAILING SLASH HERE, unless specifically needed
 
 SCOPES = [
     "https://www.googleapis.com/auth/calendar.events",
-    "https://www.googleapis.com/auth/calendar", # Add full calendar access just in case, can narrow later
-    "openid", # Often useful for basic user info
-    "https://www.googleapis.com/auth/userinfo.email" # To get user's email if needed
+    "https://www.googleapis.com/auth/calendar", # General calendar access
+    "openid", # Basic user info
+    "https://www.googleapis.com/auth/userinfo.email" # User's email
 ]
 
 # Access secrets
@@ -60,6 +60,7 @@ def creds_from_dict(data):
     if not data:
         print("DEBUG: creds_from_dict received empty data.")
         return None
+    
     # Ensure all expected fields are present for Credentials object constructor
     creds = Credentials(
         token=data.get("token"),
@@ -119,8 +120,8 @@ def login():
                 st.error(f"Failed to refresh token: {error_type}: {e}. Please sign in again.")
                 if "creds" in st.session_state:
                     del st.session_state["creds"] # Clear invalid creds
-                # Crucial: Clear query params to prevent re-using old 'code' if still in URL
-                st.experimental_set_query_params()
+                # FIX: Use st.query_params.clear() instead of st.experimental_set_query_params()
+                st.query_params.clear()
                 return False
         else:
             print("DEBUG: Credentials in session state are invalid or unrefreshable. Clearing and forcing re-login.")
@@ -128,7 +129,7 @@ def login():
                 del st.session_state["creds"] # Clear out any stale/unusable credentials
 
     # 2. Handle redirect from Google with authorization code (after user grants permission)
-    query_params = st.query_params
+    query_params = st.query_params # Use st.query_params for reading parameters
     print(f"DEBUG: Current query_params from browser URL: {query_params}")
 
     if "code" in query_params:
@@ -138,7 +139,7 @@ def login():
         # if state != st.session_state.get("oauth_state_verifier"):
         #     st.error("Authentication failed: State mismatch. Possible CSRF attack.")
         #     print("ERROR: CSRF state mismatch detected!")
-        #     st.experimental_set_query_params() # Clear bad query params
+        #     st.query_params.clear() # Clear bad query params
         #     return False
         # del st.session_state["oauth_state_verifier"] # Clear state after use
 
@@ -171,7 +172,8 @@ def login():
             # IMPORTANT: Clear the 'code' from the URL using Streamlit's API.
             # This prevents the app from trying to reuse the same 'code' on page refresh,
             # which commonly leads to 'Malformed auth code' errors.
-            st.experimental_set_query_params()
+            # FIX: Use st.query_params.clear() instead of st.experimental_set_query_params()
+            st.query_params.clear()
             print("DEBUG: Query parameters cleared from URL after successful token exchange.")
             return True
         except Exception as e:
@@ -181,7 +183,8 @@ def login():
             st.error(f"Authentication failed: {error_type}: {e}. Please try again.")
             st.warning("Double-check your **Redirect URI** in Google Cloud Console matches exactly.")
             # Clear any potentially bad data or query params on failure
-            st.experimental_set_query_params()
+            # FIX: Use st.query_params.clear() instead of st.experimental_set_query_params()
+            st.query_params.clear()
             if "creds" in st.session_state:
                 del st.session_state["creds"]
             return False
@@ -237,7 +240,6 @@ def parse_pdf(file_bytes):
                     day_str = str(df.iloc[0][col_name]).strip()
                     
                     if not day_str.isdigit():
-                        # print(f"DEBUG: Skipping non-digit day string: '{day_str}' in column '{col_name}' on page {page_num}")
                         continue # Not a valid day number, skip column
 
                     try:
@@ -252,7 +254,6 @@ def parse_pdf(file_bytes):
                     end_val   = df.loc[df["Sortida"] == "Sortida", col_name].values
                     
                     if start_val.size == 0 or end_val.size == 0:
-                        # print(f"DEBUG: Missing Entrada/Sortida data for {date} in column {col_name}. Skipping.")
                         continue # No entry for Entrada/Sortida for this day
 
                     start = str(start_val[0]).strip()
@@ -261,8 +262,6 @@ def parse_pdf(file_bytes):
                     if re.fullmatch(r"(\d{1,2}):(\d{2})", start) and re.fullmatch(r"(\d{1,2}):(\d{2})", end):
                         key = f"{date:%Y%m%d}-{start.replace(':','')}-{end.replace(':','')}" # Added end time to key for uniqueness
                         shifts.append({"key": key, "date": date.isoformat(), "start": start, "end": end})
-                    # else:
-                        # print(f"DEBUG: Skipping malformed time format for {date}: Start='{start}', End='{end}'")
         print(f"DEBUG: Finished PDF parsing. Found {len(shifts)} shifts.")
         return shifts
     except Exception as e:
