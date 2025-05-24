@@ -29,22 +29,39 @@ def get_flow():
     return flow
 
 def login():
+    # Reset credentials if needed
+    if "creds" in st.session_state and not st.session_state["creds"]:
+        del st.session_state["creds"]
+
     if "creds" in st.session_state:
         return True
+
+    # Debug: Print query params
     query_params = st.query_params
+    print(f"Query params received: {query_params}")
+
     if "code" in query_params:
         flow = get_flow()
-        flow.fetch_token(code=query_params["code"][0])
-        st.session_state["creds"] = {
-            "token": flow.credentials.token,
-            "refresh_token": flow.credentials.refresh_token,
-            "token_uri": flow.credentials.token_uri,
-            "client_id": flow.credentials.client_id,
-            "client_secret": flow.credentials.client_secret,
-            "scopes": flow.credentials.scopes,
-        }
-        st.query_params.clear()  # Clean the URL
-        return True
+
+        # Debug: Print flow credentials before fetching token
+        print("OAuth Client Configuration:", flow.client_config)
+
+        try:
+            flow.fetch_token(code=query_params["code"][0])
+            st.session_state["creds"] = {
+                "token": flow.credentials.token,
+                "refresh_token": flow.credentials.refresh_token,
+                "token_uri": flow.credentials.token_uri,
+                "client_id": flow.credentials.client_id,
+                "client_secret": flow.credentials.client_secret,
+                "scopes": flow.credentials.scopes,
+            }
+            st.query_params.clear()  # Clean the URL
+            return True
+        except Exception as e:
+            print(f"Error fetching token: {e}")
+            st.error("Authentication failed. Try again.")
+
     auth_url, _ = get_flow().authorization_url(
         access_type="offline", prompt="consent", include_granted_scopes="true")
     st.markdown(f"[**Sign in with Google**]({auth_url})", unsafe_allow_html=True)
