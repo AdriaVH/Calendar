@@ -35,23 +35,22 @@ def creds_from_dict(d):
 def google_login():
     q = st.query_params
 
-    # 1  Already signed in?
+    # 1. Already signed in?
     creds = creds_from_dict(st.session_state.get("creds"))
     if creds and creds.valid:
         return True
 
-    # 2  Back from Google with ?code=
+    # 2. First time: build flow and keep it
+    if "flow" not in st.session_state:
+        st.session_state.flow = make_flow()
+
+    flow = st.session_state.flow
+
+    # 3. Back from Google with ?code=
     if "code" in q and not st.session_state.get("auth_code_handled"):
-        st.session_state["auth_code_handled"] = True      # use only once
-        code   = q["code"][0]
-        state  = st.session_state.get("oauth_state")      # may be None
-
-        # 👉 Build Flow WITH state if we still have it,
-        #    otherwise build a brand-new Flow (no state check)
-        flow = make_flow(state) if state else make_flow()
-
+        st.session_state["auth_code_handled"] = True
         try:
-            flow.fetch_token(code=code)                  # exchange!
+            flow.fetch_token(code=q["code"][0])
             c = flow.credentials
             st.session_state["creds"] = {
                 "token": c.token,
@@ -61,19 +60,20 @@ def google_login():
                 "client_secret": c.client_secret,
                 "scopes": c.scopes,
             }
-            st.query_params.clear()                      # wipe ?code
+            st.query_params.clear()
+            del st.session_state["flow"]
             return True
         except Exception as e:
             st.error(f"OAuth error: {e}")
             st.query_params.clear()
             return False
 
-    # 3  Kick off login
-    flow = make_flow()
-    auth_url, state = flow.authorization_url(
-        access_type="offline", prompt="consent", include_granted_scopes="true"
+    # 4. Start OAuth flow
+    auth_url, _ = flow.authorization_url(
+        access_type="offline",
+        prompt="consent",
+        include_granted_scopes="true"
     )
-    st.session_state["oauth_state"] = state
     st.markdown(f"[**Sign in with Google**]({auth_url})", unsafe_allow_html=True)
     return False
 
@@ -97,7 +97,12 @@ def parse_pdf(data):
                 e = df.loc[df["Sortida"] == "Sortida", col].values
                 if s.size and e.size and re.fullmatch(r"\d{1,2}:\d{2}", s[0]) and re.fullmatch(r"\d{1,2}:\d{2}", e[0]):
                     key = f"{date:%Y%m%d}-{s[0].replace(':','')}"
-                    shifts.append({"key": key, "date": date.isoformat(), "start": s[0], "end": e[0]})
+                    shifts.append({
+                        "key": key,
+                        "date": date.isoformat(),
+                        "start": s[0],
+                        "end": e[0]
+                    })
     return shifts
 
 # ---------- CALENDAR SYNC ----------
@@ -109,7 +114,9 @@ def sync(creds, shifts, tz="Europe/Madrid"):
         timeMin=now,
         privateExtendedProperty="shiftUploader=1"
     ).execute().get("items", [])
+
     by_key = {e["extendedProperties"]["private"]["key"]: e for e in existing if "extendedProperties" in e}
+
     ins = upd = dele = 0
     for s in shifts:
         start_iso = f"{s['date']}T{s['start']}:00"
@@ -127,9 +134,11 @@ def sync(creds, shifts, tz="Europe/Madrid"):
         else:
             service.events().insert(calendarId="primary", body=body).execute()
             ins += 1
+
     for e in by_key.values():
         service.events().delete(calendarId="primary", eventId=e["id"]).execute()
         dele += 1
+
     return ins, upd, dele
 
 # ---------- STREAMLIT UI ----------
