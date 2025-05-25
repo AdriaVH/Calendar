@@ -9,7 +9,7 @@ from googleapiclient.discovery import build
 SCOPES = ["https://www.googleapis.com/auth/calendar.events"]
 CLIENT_ID     = st.secrets["google"]["client_id"]
 CLIENT_SECRET = st.secrets["google"]["client_secret"]
-REDIRECT_URI  = st.secrets["google"]["redirect_uri"]
+REDIRECT_URI  = st.secrets["google"]["redirect_uri"]  # must match console exactly!
 
 # ---------- OAUTH FLOW ----------
 def make_flow(state=None):
@@ -35,18 +35,18 @@ def creds_from_dict(d):
 def google_login():
     q = st.query_params
 
-    # 1. Already signed in?
+    # Already signed in?
     creds = creds_from_dict(st.session_state.get("creds"))
     if creds and creds.valid:
         return True
 
-    # 2. First time: build flow and keep it
+    # First load: build + keep the flow --------------------------------------
     if "flow" not in st.session_state:
         st.session_state.flow = make_flow()
 
     flow = st.session_state.flow
 
-    # 3. Back from Google with ?code=
+    # Callback: ?code= --------------------------------------------------------
     if "code" in q and not st.session_state.get("auth_code_handled"):
         st.session_state["auth_code_handled"] = True
         try:
@@ -68,17 +68,35 @@ def google_login():
             st.query_params.clear()
             return False
 
-    # 4. Start OAuth flow
+    # Fallback: we have ?code= but lost the flow (opened in new tab) ---------
+    if "code" in q and "flow" not in st.session_state:
+        st.warning("The login callback opened in a new browser tab/window, "
+                   "so the security data needed to finish sign-in is missing. "
+                   "Please click the button below and complete the sign-in **in the same tab**.")
+        if st.button("Restart Google sign-in"):
+            st.query_params.clear()
+        return False
+
+    # Kick off OAuth ---------------------------------------------------------
     auth_url, _ = flow.authorization_url(
         access_type="offline",
         prompt="consent",
         include_granted_scopes="true"
     )
-    st.markdown(f"[**Sign in with Google**]({auth_url})", unsafe_allow_html=True)
+
+    # ⬅  OPEN LINK IN SAME TAB  ⬅
+    st.markdown(
+        f'<a href="{auth_url}" target="_self" '
+        'style="display:inline-block;padding:0.6em 1.2em;'
+        'background:#4285F4;color:#fff;border-radius:4px;'
+        'font-weight:600;text-decoration:none;">'
+        'Sign in with Google</a>',
+        unsafe_allow_html=True
+    )
     return False
 
 
-# ---------- PDF PARSER ----------
+# ---------- PDF PARSER (unchanged) ----------
 def parse_pdf(data):
     shifts = []
     with pdfplumber.open(io.BytesIO(data)) as pdf:
@@ -105,7 +123,7 @@ def parse_pdf(data):
                     })
     return shifts
 
-# ---------- CALENDAR SYNC ----------
+# ---------- CALENDAR SYNC (unchanged) ----------
 def sync(creds, shifts, tz="Europe/Madrid"):
     service = build("calendar", "v3", credentials=creds, cache_discovery=False)
     now = dt.datetime.utcnow().isoformat() + "Z"
@@ -115,7 +133,8 @@ def sync(creds, shifts, tz="Europe/Madrid"):
         privateExtendedProperty="shiftUploader=1"
     ).execute().get("items", [])
 
-    by_key = {e["extendedProperties"]["private"]["key"]: e for e in existing if "extendedProperties" in e}
+    by_key = {e["extendedProperties"]["private"]["key"]: e
+              for e in existing if "extendedProperties" in e}
 
     ins = upd = dele = 0
     for s in shifts:
@@ -125,10 +144,16 @@ def sync(creds, shifts, tz="Europe/Madrid"):
             "summary": f"P {s['start']}",
             "start": {"dateTime": start_iso, "timeZone": tz},
             "end":   {"dateTime": end_iso,   "timeZone": tz},
-            "extendedProperties": {"private": {"shiftUploader": "1", "key": s["key"]}},
+            "extendedProperties": {
+                "private": {"shiftUploader": "1", "key": s["key"]}
+            },
         }
         if s["key"] in by_key:
-            service.events().patch(calendarId="primary", eventId=by_key[s["key"]]["id"], body=body).execute()
+            service.events().patch(
+                calendarId="primary",
+                eventId=by_key[s["key"]]["id"],
+                body=body
+            ).execute()
             upd += 1
             del by_key[s["key"]]
         else:
