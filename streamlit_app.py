@@ -9,10 +9,10 @@ from googleapiclient.errors import HttpError
 import traceback
 
 # --- Configuration (Read from Streamlit Secrets) ---
-# IMPORTANT: Ensure your Streamlit Cloud Secrets are configured:
-# google_client_id = "YOUR_GOOGLE_CLIENT_ID"
-# google_client_secret = "YOUR_GOOGLE_CLIENT_SECRET"
-# google_redirect_uri = "https://makecalendar.streamlit.app" # NO TRAILING SLASH HERE
+# IMPORTANT: Ensure your Streamlit Cloud Secrets are configured with these exact key names:
+# google.client_id = "YOUR_GOOGLE_CLIENT_ID"
+# google.client_secret = "YOUR_GOOGLE_CLIENT_SECRET"
+# google.redirect_uri = "https://makecalendar.streamlit.app" # NO TRAILING SLASH HERE
 
 SCOPES = [
     "https://www.googleapis.com/auth/calendar.events",
@@ -21,14 +21,10 @@ SCOPES = [
     "https://www.googleapis.com/auth/userinfo.email" # User's email
 ]
 
-# Access secrets
-# Note: Streamlit converts dotted secret names (e.g., google.client_id)
-# to st.secrets["google"]["client_id"] if using secrets.toml locally
-# or directly to st.secrets.google_client_id if using Cloud secrets UI.
-# Let's use the direct access method for Cloud for clarity.
-CLIENT_ID     = st.secrets.google_client_id
-CLIENT_SECRET = st.secrets.google_client_secret
-REDIRECT_URI  = st.secrets.google_redirect_uri
+# Access secrets - CORRECTED TO DICTIONARY-STYLE ACCESS
+CLIENT_ID     = st.secrets["google"]["client_id"]
+CLIENT_SECRET = st.secrets["google"]["client_secret"]
+REDIRECT_URI  = st.secrets["google"]["redirect_uri"]
 
 # Print configuration details to Streamlit Cloud logs for debugging
 print(f"\n--- App Initialization ({dt.datetime.now()}) ---")
