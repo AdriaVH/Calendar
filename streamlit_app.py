@@ -9,11 +9,10 @@ from googleapiclient.errors import HttpError
 import traceback
 
 # --- Configuration (Read from Streamlit Secrets) ---
-# IMPORTANT: Ensure your .streamlit/secrets.toml looks like this:
-# [google]
-# client_id = "YOUR_GOOGLE_CLIENT_ID"
-# client_secret = "YOUR_GOOGLE_CLIENT_SECRET"
-# redirect_uri = "https://makecalendar.streamlit.app" # NO TRAILING SLASH HERE, unless specifically needed
+# IMPORTANT: Ensure your Streamlit Cloud Secrets are configured:
+# google_client_id = "YOUR_GOOGLE_CLIENT_ID"
+# google_client_secret = "YOUR_GOOGLE_CLIENT_SECRET"
+# google_redirect_uri = "https://makecalendar.streamlit.app" # NO TRAILING SLASH HERE
 
 SCOPES = [
     "https://www.googleapis.com/auth/calendar.events",
@@ -23,9 +22,13 @@ SCOPES = [
 ]
 
 # Access secrets
-CLIENT_ID     = st.secrets["google"]["client_id"]
-CLIENT_SECRET = st.secrets["google"]["client_secret"]
-REDIRECT_URI  = st.secrets["google"]["redirect_uri"]
+# Note: Streamlit converts dotted secret names (e.g., google.client_id)
+# to st.secrets["google"]["client_id"] if using secrets.toml locally
+# or directly to st.secrets.google_client_id if using Cloud secrets UI.
+# Let's use the direct access method for Cloud for clarity.
+CLIENT_ID     = st.secrets.google_client_id
+CLIENT_SECRET = st.secrets.google_client_secret
+REDIRECT_URI  = st.secrets.google_redirect_uri
 
 # Print configuration details to Streamlit Cloud logs for debugging
 print(f"\n--- App Initialization ({dt.datetime.now()}) ---")
@@ -53,6 +56,8 @@ def get_flow():
     )
     flow.redirect_uri = REDIRECT_URI # This sets the redirect URI for the token exchange
     print(f"DEBUG: Flow object created. flow.redirect_uri: {flow.redirect_uri}")
+    # Add this line for deeper inspection of client config values
+    print(f"DEBUG: Flow client_config['web']: {flow.client_config['web']}")
     return flow
 
 def creds_from_dict(data):
@@ -120,8 +125,7 @@ def login():
                 st.error(f"Failed to refresh token: {error_type}: {e}. Please sign in again.")
                 if "creds" in st.session_state:
                     del st.session_state["creds"] # Clear invalid creds
-                # FIX: Use st.query_params.clear() instead of st.experimental_set_query_params()
-                st.query_params.clear()
+                st.query_params.clear() # Clear any query parameters (like stale 'code')
                 return False
         else:
             print("DEBUG: Credentials in session state are invalid or unrefreshable. Clearing and forcing re-login.")
@@ -172,7 +176,6 @@ def login():
             # IMPORTANT: Clear the 'code' from the URL using Streamlit's API.
             # This prevents the app from trying to reuse the same 'code' on page refresh,
             # which commonly leads to 'Malformed auth code' errors.
-            # FIX: Use st.query_params.clear() instead of st.experimental_set_query_params()
             st.query_params.clear()
             print("DEBUG: Query parameters cleared from URL after successful token exchange.")
             return True
@@ -183,7 +186,6 @@ def login():
             st.error(f"Authentication failed: {error_type}: {e}. Please try again.")
             st.warning("Double-check your **Redirect URI** in Google Cloud Console matches exactly.")
             # Clear any potentially bad data or query params on failure
-            # FIX: Use st.query_params.clear() instead of st.experimental_set_query_params()
             st.query_params.clear()
             if "creds" in st.session_state:
                 del st.session_state["creds"]
@@ -352,7 +354,7 @@ def sync_shifts(creds, shifts, tz="Europe/Madrid"):
                 print(f"DEBUG: Deleted event with ID: {ev['id']}")
             except HttpError as error:
                 print(f"ERROR: Google Calendar API error deleting event {ev['id']}: {error}")
-                st.error(f"Error deleting event with ID '{ev['id']}': {error.status_code} - {error.reason}")
+                st.error(f"Error deleting event with ID '{ev["id"]}': {error.status_code} - {error.reason}")
 
         print(f"DEBUG: Sync complete. Inserts: {inserts}, Updates: {updates}, Deletes: {deletes}")
         return inserts, updates, deletes
