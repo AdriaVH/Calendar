@@ -29,19 +29,21 @@ def make_flow(state=None):
     flow.redirect_uri = REDIRECT_URI
     return flow
 
-def creds_from_dict(d): return Credentials(**d) if d else None
+def creds_from_dict(d):
+    return Credentials(**d) if d else None
 
 # ---------- LOGIN ----------
 def google_login():
     q = st.query_params
-    # 1. Already signed in
-    if "creds" in st.session_state:
-        if creds_from_dict(st.session_state["creds"]).valid:
-            return True
 
-    # 2. Return from Google with ?code=
+    # 1. Already signed in?
+    creds = creds_from_dict(st.session_state.get("creds"))
+    if creds and creds.valid:
+        return True
+
+    # 2. Returning from Google OAuth
     if "code" in q and not st.session_state.get("auth_code_handled"):
-        st.session_state["auth_code_handled"] = True  # prevent re-use
+        st.session_state["auth_code_handled"] = True  # only once
         code = q["code"][0]
         state = st.session_state.get("oauth_state")
         try:
@@ -63,7 +65,7 @@ def google_login():
             st.query_params.clear()
             return False
 
-    # 3. Start login
+    # 3. Show login button
     flow = make_flow()
     auth_url, state = flow.authorization_url(
         access_type="offline", prompt="consent", include_granted_scopes="true"
