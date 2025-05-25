@@ -7,6 +7,9 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 import traceback
 
+# ---------- STREAMLIT UI CONFIG (MUST BE FIRST) ----------
+st.set_page_config(page_title="Shift Uploader", page_icon="📅", layout="centered")
+
 # ---------- CONFIG ----------
 SCOPES = [
     "https://www.googleapis.com/auth/calendar.events",
@@ -122,7 +125,7 @@ def google_login():
             if "creds" in st.session_state:
                 del st.session_state["creds"]
             st.query_params.clear()
-            st.experimental_rerun() # Force a rerun to clear params and show login button
+            st.experimental_rerun()
             return False
     elif creds and (not creds.valid or not creds.refresh_token):
         st.warning("Your existing Google credentials are invalid or unrefreshable. Please sign in again.")
@@ -161,8 +164,8 @@ def google_login():
                 "id_token": c.id_token,
             }
             st.success("Successfully signed in with Google!")
-            st.query_params.clear() # Clear parameters immediately
-            st.experimental_rerun() # Rerun to clean URL
+            st.query_params.clear()
+            st.experimental_rerun()
             return True
         except Exception as e:
             error_type = type(e).__name__
@@ -170,10 +173,10 @@ def google_login():
             st.warning("Double-check your **Redirect URI** in Google Cloud Console matches exactly `https://makecalendar.streamlit.app`.")
             st.info("Error details (debug): " + str(e)) # Display error message in UI
 
-            st.query_params.clear() # Clear parameters on failure
+            st.query_params.clear()
             if "creds" in st.session_state:
                 del st.session_state["creds"]
-            st.experimental_rerun() # Rerun to clear URL and show login button
+            st.experimental_rerun()
             return False
     elif "code" in query_params and st.session_state.get("auth_code_handled", False):
         st.warning("Code already processed. Clearing URL and redirecting...")
@@ -310,8 +313,7 @@ def sync(creds, shifts, tz="Europe/Madrid"):
         return 0, 0, 0
 
 
-# ---------- STREAMLIT UI ----------
-st.set_page_config(page_title="Shift Uploader", page_icon="📅", layout="centered")
+# ---------- STREAMLIT UI (MAIN APP LOGIC) ----------
 st.title("📤 Shift → Google Calendar")
 
 if "creds" not in st.session_state:
