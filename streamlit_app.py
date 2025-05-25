@@ -9,11 +9,6 @@ from googleapiclient.errors import HttpError
 import traceback
 
 # --- Configuration (Read from Streamlit Secrets) ---
-# IMPORTANT: Ensure your Streamlit Cloud Secrets are configured with these exact key names:
-# google.client_id = "YOUR_GOOGLE_CLIENT_ID"
-# google.client_secret = "YOUR_GOOGLE_CLIENT_SECRET"
-# google.redirect_uri = "https://makecalendar.streamlit.app" # NO TRAILING SLASH HERE
-
 SCOPES = [
     "https://www.googleapis.com/auth/calendar.events",
     "https://www.googleapis.com/auth/calendar", # General calendar access
@@ -21,12 +16,12 @@ SCOPES = [
     "https://www.googleapis.com/auth/userinfo.email" # User's email
 ]
 
-# Access secrets - CORRECTED TO DICTIONARY-STYLE ACCESS
+# Access secrets
 CLIENT_ID     = st.secrets["google"]["client_id"]
 CLIENT_SECRET = st.secrets["google"]["client_secret"]
 REDIRECT_URI  = st.secrets["google"]["redirect_uri"]
 
-# --- ADDED DEBUGGING FOR SECRETS ---
+# Print configuration details to Streamlit Cloud logs for debugging
 print(f"\n--- App Initialization ({dt.datetime.now()}) ---")
 print(f"DEBUG: Configured CLIENT_ID (first 5 chars): {CLIENT_ID[:5] if CLIENT_ID else 'None/Empty'}")
 print(f"DEBUG: Configured CLIENT_SECRET (first 5 chars): {CLIENT_SECRET[:5] if CLIENT_SECRET else 'None/Empty'}")
@@ -55,12 +50,12 @@ def get_flow():
         )
         flow.redirect_uri = REDIRECT_URI # This sets the redirect URI for the token exchange
         print(f"DEBUG: Flow object created. flow.redirect_uri: {flow.redirect_uri}")
-        # Safely access client_config['web'] for printing
-        if hasattr(flow, 'client_config') and 'web' in flow.client_config:
-            print(f"DEBUG: Flow client_config['web']: {flow.client_config['web']}")
+        
+        # Corrected way to print client_config as it's not nested under 'web' directly
+        if hasattr(flow, 'client_config'):
+            print(f"DEBUG: Flow client_config: {flow.client_config}")
         else:
-            print("ERROR: flow.client_config or 'web' key not found after Flow.from_client_config.")
-            print(f"DEBUG: flow.client_config: {getattr(flow, 'client_config', 'Attribute Not Found')}")
+            print("ERROR: flow.client_config attribute not found after Flow.from_client_config.")
 
     except Exception as e:
         print(f"ERROR: Exception during Flow.from_client_config: {type(e).__name__}: {e}")
@@ -76,7 +71,6 @@ def creds_from_dict(data):
         print("DEBUG: creds_from_dict received empty data.")
         return None
     
-    # Ensure all expected fields are present for Credentials object constructor
     creds = Credentials(
         token=data.get("token"),
         refresh_token=data.get("refresh_token"),
@@ -84,7 +78,7 @@ def creds_from_dict(data):
         client_id=data.get("client_id"),
         client_secret=data.get("client_secret"),
         scopes=data.get("scopes"),
-        id_token=data.get("id_token") # Include id_token if available/needed
+        id_token=data.get("id_token")
     )
     print(f"DEBUG: Credentials object created. Valid: {creds.valid}, Expired: {creds.expired}, Refreshable: {bool(creds.refresh_token)}")
     return creds
@@ -98,6 +92,30 @@ def login():
     st.markdown("---") # Visual separator for logs
     print(f"\n--- login() function called at {dt.datetime.now()} ---")
 
+    query_params = st.query_params
+    print(f"DEBUG: Current query_params from browser URL: {query_params}")
+
+    # --- NEW: Aggressively clear 'code' if present ---
+    # This attempts to prevent immediate reuse of a one-time auth code
+    if "code" in query_params:
+        print("DEBUG: 'code' found in query_params. Attempting to clear immediately to prevent reuse.")
+        # Store it for this run, then clear from URL
+        temp_auth_code = query_params["code"][0]
+        # It's crucial to clear query_params *before* Streamlit reruns
+        # However, st.query_params.clear() triggers a rerun itself.
+        # This means the script will run again from the top immediately after this line.
+        # So we need to ensure the 'code' is processed *before* this first clear,
+        # or we rely on the second clear after successful token fetch.
+
+        # Let's try to fetch token *first*, then clear if successful.
+        # If it fails, we clear anyway. The original logic was better for this.
+        # The core problem is the underlying cause of Malformed auth code if it's not due to simple reuse.
+        
+        # Reverting this aggressive clear for now. The previous placement is mostly fine if the token fetch is fast.
+        # The error suggests the fetch is failing anyway, before clear.
+        pass # Reverting this section for now.
+
+
     # 1. Check if user is already authenticated and tokens are valid/refreshable
     if "creds" in st.session_state and st.session_state["creds"]:
         creds_dict = st.session_state["creds"]
@@ -107,16 +125,14 @@ def login():
             print("DEBUG: Credentials found in session state and are currently valid.")
             return True
         elif creds and creds.expired and creds.refresh_token:
-            # Token expired, try to refresh using the stored refresh_token
             print("DEBUG: Credentials expired. Attempting to refresh token...")
             try:
                 flow = get_flow()
-                if not flow: # If get_flow() failed, we can't proceed
+                if not flow:
                     return False
-                flow.credentials = creds # Attach the expired creds to the flow for refreshing
-                flow.refresh_credentials() # This attempts to use the refresh_token
+                flow.credentials = creds
+                flow.refresh_credentials()
 
-                # Update session state with new token (refresh token might also be updated by Google)
                 st.session_state["creds"] = {
                     "token": flow.credentials.token,
                     "refresh_token": flow.credentials.refresh_token,
@@ -130,35 +146,26 @@ def login():
                 print("DEBUG: Credentials refreshed and updated in session state.")
                 return True
             except Exception as e:
-                # Refresh failed (e.g., refresh token revoked or expired by Google)
                 error_type = type(e).__name__
                 print(f"ERROR: Failed to refresh token: {error_type}: {e}")
-                traceback.print_exc() # Print full traceback to logs
+                traceback.print_exc()
                 st.error(f"Failed to refresh token: {error_type}: {e}. Please sign in again.")
                 if "creds" in st.session_state:
-                    del st.session_state["creds"] # Clear invalid creds
-                st.query_params.clear() # Clear any query parameters (like stale 'code')
+                    del st.session_state["creds"]
+                st.query_params.clear()
                 return False
         else:
             print("DEBUG: Credentials in session state are invalid or unrefreshable. Clearing and forcing re-login.")
             if "creds" in st.session_state:
-                del st.session_state["creds"] # Clear out any stale/unusable credentials
+                del st.session_state["creds"]
 
     # 2. Handle redirect from Google with authorization code (after user grants permission)
-    query_params = st.query_params # Use st.query_params for reading parameters
-    print(f"DEBUG: Current query_params from browser URL: {query_params}")
+    # Re-fetch query_params here as it might have changed after the initial load.
+    query_params = st.query_params 
+    print(f"DEBUG: Re-checking query_params after initial checks: {query_params}")
 
     if "code" in query_params:
         auth_code = query_params["code"][0]
-        # For security, you'd typically check 'state' here if you're using it
-        # state = query_params.get("state", [None])[0]
-        # if state != st.session_state.get("oauth_state_verifier"):
-        #     st.error("Authentication failed: State mismatch. Possible CSRF attack.")
-        #     print("ERROR: CSRF state mismatch detected!")
-        #     st.query_params.clear() # Clear bad query params
-        #     return False
-        # del st.session_state["oauth_state_verifier"] # Clear state after use
-
         print(f"DEBUG: Found 'code' in query_params. Attempting token exchange with code: {auth_code[:10]}... (first 10 chars)")
 
         try:
@@ -168,14 +175,12 @@ def login():
                 print("ERROR: get_flow() failed in login() before token fetch.")
                 return False
 
-            # This is the line that will likely raise InvalidGrantError if there's a mismatch
             print(f"DEBUG: Calling flow.fetch_token() with code and flow.redirect_uri: {flow.redirect_uri}")
             flow.fetch_token(code=auth_code)
 
-            # Store ALL necessary credential parts in session state
             st.session_state["creds"] = {
                 "token": flow.credentials.token,
-                "refresh_token": flow.credentials.refresh_token, # CRUCIAL for long-lived access
+                "refresh_token": flow.credentials.refresh_token,
                 "token_uri": flow.credentials.token_uri,
                 "client_id": flow.credentials.client_id,
                 "client_secret": flow.credentials.client_secret,
@@ -186,41 +191,39 @@ def login():
             print("DEBUG: Token fetched and credentials stored in session state.")
 
             # IMPORTANT: Clear the 'code' from the URL using Streamlit's API.
-            # This prevents the app from trying to reuse the same 'code' on page refresh,
-            # which commonly leads to 'Malformed auth code' errors.
+            # This prevents the app from trying to reuse the same 'code' on page refresh.
             st.query_params.clear()
             print("DEBUG: Query parameters cleared from URL after successful token exchange.")
             return True
         except Exception as e:
             error_type = type(e).__name__
             print(f"ERROR: Exception during token fetch: {error_type}: {e}")
-            traceback.print_exc() # Print full traceback to logs for detailed error
+            traceback.print_exc()
             st.error(f"Authentication failed: {error_type}: {e}. Please try again.")
             st.warning("Double-check your **Redirect URI** in Google Cloud Console matches exactly.")
-            # Clear any potentially bad data or query params on failure
-            st.query_params.clear()
+            st.query_params.clear() # Clear any potentially bad data or query params on failure
             if "creds" in st.session_state:
                 del st.session_state["creds"]
             return False
     else:
         # 3. If no 'code' in URL and no valid creds, display login button
-        print("DEBUG: No 'code' found in query_params and no valid credentials. Displaying login prompt.")
+        print("DEBUG: No 'code' found in query_params after re-check and no valid credentials. Displaying login prompt.")
         flow = get_flow()
         if flow:
             authorization_url, state = flow.authorization_url(
-                access_type="offline",          # CRUCIAL: To obtain a refresh token
-                prompt="consent",               # CRUCIAL: Forces user to re-consent, ensures refresh token is issued
+                access_type="offline",
+                prompt="consent",
                 include_granted_scopes="true"
             )
-            # Store 'state' to prevent CSRF attacks if you implement state checking
-            # st.session_state["oauth_state_verifier"] = state
             print(f"DEBUG: Generated Google authorization URL: {authorization_url}")
             st.markdown(f"[**Sign in with Google**]({authorization_url})", unsafe_allow_html=True)
         else:
             st.error("Cannot initialize Google login. Please check `client_secrets` configuration.")
         return False
 
-# ---------- PDF parser ----------
+# ---------- PDF parser and Calendar Sync (unchanged) ----------
+# (Previous code for parse_pdf, sync_shifts remains here)
+# ... [rest of your code, unchanged] ...
 def parse_pdf(file_bytes):
     """Parses shifts from a PDF file."""
     shifts = []
@@ -284,7 +287,6 @@ def parse_pdf(file_bytes):
         st.error(f"An error occurred while parsing the PDF: {e}")
         return []
 
-# ---------- Calendar sync ----------
 def sync_shifts(creds, shifts, tz="Europe/Madrid"):
     """Syncs the parsed shifts to Google Calendar."""
     print(f"DEBUG: sync_shifts called. Timezone: {tz}.")
@@ -387,13 +389,10 @@ if "creds" not in st.session_state:
     st.session_state["creds"] = None
 
 # Attempt to log in or display login prompt
-# The login() function will return True if successful (already logged in, or just logged in)
-# It will display the login button if not logged in.
 if login():
-    # If login() returns True, it means we have valid credentials to proceed
-    creds = creds_from_dict(st.session_state["creds"]) # Re-create credentials object from dict
+    creds = creds_from_dict(st.session_state["creds"])
 
-    st.write("---") # Separator for logged-in content
+    st.write("---")
 
     file = st.file_uploader("Upload your PDF schedule", type="pdf", help="Please upload a PDF file containing your work schedule.")
     if file:
@@ -405,13 +404,12 @@ if login():
             st.info("Ensure the PDF is a standard tabular schedule.")
         else:
             st.info(f"Successfully found **{len(shifts)}** shifts from the PDF. Preview:")
-            st.dataframe(pd.DataFrame(shifts), use_container_width=True) # Display parsed shifts
+            st.dataframe(pd.DataFrame(shifts), use_container_width=True)
 
             st.write("---")
             st.subheader("Sync to Google Calendar")
             st.warning("Before syncing, ensure your Google Calendar is selected as 'primary' or the correct calendar ID is used in the code.")
             
-            # Add a confirmation checkbox
             confirm_sync = st.checkbox("I understand shifts will be added/updated/deleted in my primary Google Calendar.")
             
             if confirm_sync and st.button("Sync Shifts Now"):
@@ -419,7 +417,7 @@ if login():
                     try:
                         ins, upd, dele = sync_shifts(creds, shifts)
                         st.success(f"✅ Sync Complete: Inserted {ins}, Updated {upd}, Deleted {dele} shifts.")
-                        st.balloons() # Visual celebration!
+                        st.balloons()
                     except Exception as e:
                         st.error(f"An unexpected error occurred during calendar synchronization: {e}")
                         print(f"ERROR: Unhandled exception during sync: {e}")
@@ -427,6 +425,4 @@ if login():
     else:
         st.info("Upload a PDF to begin.")
 else:
-    # If login() returns False, the login process is not complete.
-    # The login() function itself will display the "Sign in with Google" button.
     st.info("Please sign in with your Google account to upload your shifts.")
