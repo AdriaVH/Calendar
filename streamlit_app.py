@@ -26,9 +26,10 @@ CLIENT_ID     = st.secrets["google"]["client_id"]
 CLIENT_SECRET = st.secrets["google"]["client_secret"]
 REDIRECT_URI  = st.secrets["google"]["redirect_uri"]
 
-# Print configuration details to Streamlit Cloud logs for debugging
+# --- ADDED DEBUGGING FOR SECRETS ---
 print(f"\n--- App Initialization ({dt.datetime.now()}) ---")
-print(f"DEBUG: Configured CLIENT_ID: {CLIENT_ID}")
+print(f"DEBUG: Configured CLIENT_ID (first 5 chars): {CLIENT_ID[:5] if CLIENT_ID else 'None/Empty'}")
+print(f"DEBUG: Configured CLIENT_SECRET (first 5 chars): {CLIENT_SECRET[:5] if CLIENT_SECRET else 'None/Empty'}")
 print(f"DEBUG: Configured REDIRECT_URI: {REDIRECT_URI}")
 print(f"DEBUG: Configured SCOPES: {SCOPES}")
 
@@ -38,22 +39,35 @@ print(f"DEBUG: Configured SCOPES: {SCOPES}")
 def get_flow():
     """Initializes and returns the Google OAuth Flow object."""
     print(f"DEBUG: get_flow() called. Setting redirect_uri to: {REDIRECT_URI}")
-    flow = Flow.from_client_config(
-        {
-            "web": {
-                "client_id": CLIENT_ID,
-                "client_secret": CLIENT_SECRET,
-                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-                "token_uri": "https://oauth2.googleapis.com/token",
-                "redirect_uris": [REDIRECT_URI], # This is the redirect URI sent during initial authorization
-            }
-        },
-        scopes=SCOPES,
-    )
-    flow.redirect_uri = REDIRECT_URI # This sets the redirect URI for the token exchange
-    print(f"DEBUG: Flow object created. flow.redirect_uri: {flow.redirect_uri}")
-    # Add this line for deeper inspection of client config values
-    print(f"DEBUG: Flow client_config['web']: {flow.client_config['web']}")
+    flow = None # Initialize flow to None
+    try:
+        flow = Flow.from_client_config(
+            {
+                "web": {
+                    "client_id": CLIENT_ID,
+                    "client_secret": CLIENT_SECRET,
+                    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                    "token_uri": "https://oauth2.googleapis.com/token",
+                    "redirect_uris": [REDIRECT_URI], # This is the redirect URI sent during initial authorization
+                }
+            },
+            scopes=SCOPES,
+        )
+        flow.redirect_uri = REDIRECT_URI # This sets the redirect URI for the token exchange
+        print(f"DEBUG: Flow object created. flow.redirect_uri: {flow.redirect_uri}")
+        # Safely access client_config['web'] for printing
+        if hasattr(flow, 'client_config') and 'web' in flow.client_config:
+            print(f"DEBUG: Flow client_config['web']: {flow.client_config['web']}")
+        else:
+            print("ERROR: flow.client_config or 'web' key not found after Flow.from_client_config.")
+            print(f"DEBUG: flow.client_config: {getattr(flow, 'client_config', 'Attribute Not Found')}")
+
+    except Exception as e:
+        print(f"ERROR: Exception during Flow.from_client_config: {type(e).__name__}: {e}")
+        traceback.print_exc()
+        st.error(f"Failed to initialize Google login. Check your CLIENT_ID and CLIENT_SECRET in Streamlit secrets. Error: {e}")
+        return None # Return None if flow creation fails
+    
     return flow
 
 def creds_from_dict(data):
@@ -97,6 +111,8 @@ def login():
             print("DEBUG: Credentials expired. Attempting to refresh token...")
             try:
                 flow = get_flow()
+                if not flow: # If get_flow() failed, we can't proceed
+                    return False
                 flow.credentials = creds # Attach the expired creds to the flow for refreshing
                 flow.refresh_credentials() # This attempts to use the refresh_token
 
