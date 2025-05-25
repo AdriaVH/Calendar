@@ -9,7 +9,7 @@ from googleapiclient.discovery import build
 SCOPES = ["https://www.googleapis.com/auth/calendar.events"]
 CLIENT_ID     = st.secrets["google"]["client_id"]
 CLIENT_SECRET = st.secrets["google"]["client_secret"]
-REDIRECT_URI  = st.secrets["google"]["redirect_uri"]  # must match console exactly!
+REDIRECT_URI  = st.secrets["google"]["redirect_uri"]
 
 # ---------- OAUTH FLOW ----------
 def make_flow(state=None):
@@ -35,22 +35,26 @@ def creds_from_dict(d):
 def google_login():
     q = st.query_params
 
-    # Already signed in?
+    # 1  Already signed in?
     creds = creds_from_dict(st.session_state.get("creds"))
     if creds and creds.valid:
         return True
 
-    # First load: build + keep the flow --------------------------------------
-    if "flow" not in st.session_state:
-        st.session_state.flow = make_flow()
-
-    flow = st.session_state.flow
-
-    # Callback: ?code= --------------------------------------------------------
+    # 2  Back from Google with ?code=
     if "code" in q and not st.session_state.get("auth_code_handled"):
-        st.session_state["auth_code_handled"] = True
+        st.session_state["auth_code_handled"] = True      # use only once
+        code   = q["code"][0]
+        state  = st.session_state.get("oauth_state")      # may be None
+
+        # 👉 Build Flow WITH state if we still have it,
+        #    otherwise build a brand-new Flow (no state check)
+        flow = make_flow(state) if state else make_flow()
+
+
+
+
         try:
-            flow.fetch_token(code=q["code"][0])
+            flow.fetch_token(code=code)                  # exchange!
             c = flow.credentials
             st.session_state["creds"] = {
                 "token": c.token,
@@ -60,43 +64,26 @@ def google_login():
                 "client_secret": c.client_secret,
                 "scopes": c.scopes,
             }
-            st.query_params.clear()
-            del st.session_state["flow"]
+            st.query_params.clear()                      # wipe ?code
+
             return True
         except Exception as e:
             st.error(f"OAuth error: {e}")
             st.query_params.clear()
             return False
 
-    # Fallback: we have ?code= but lost the flow (opened in new tab) ---------
-    if "code" in q and "flow" not in st.session_state:
-        st.warning("The login callback opened in a new browser tab/window, "
-                   "so the security data needed to finish sign-in is missing. "
-                   "Please click the button below and complete the sign-in **in the same tab**.")
-        if st.button("Restart Google sign-in"):
-            st.query_params.clear()
-        return False
+    # 3  Kick off login
+    flow = make_flow()
+    auth_url, state = flow.authorization_url(
+        access_type="offline", prompt="consent", include_granted_scopes="true"
 
-    # Kick off OAuth ---------------------------------------------------------
-    auth_url, _ = flow.authorization_url(
-        access_type="offline",
-        prompt="consent",
-        include_granted_scopes="true"
     )
-
-    # ⬅  OPEN LINK IN SAME TAB  ⬅
-    st.markdown(
-        f'<a href="{auth_url}" target="_self" '
-        'style="display:inline-block;padding:0.6em 1.2em;'
-        'background:#4285F4;color:#fff;border-radius:4px;'
-        'font-weight:600;text-decoration:none;">'
-        'Sign in with Google</a>',
-        unsafe_allow_html=True
-    )
+    st.session_state["oauth_state"] = state
+    st.markdown(f"[**Sign in with Google**]({auth_url})", unsafe_allow_html=True)
     return False
 
 
-# ---------- PDF PARSER (unchanged) ----------
+# ---------- PDF PARSER ----------
 def parse_pdf(data):
     shifts = []
     with pdfplumber.open(io.BytesIO(data)) as pdf:
@@ -115,15 +102,15 @@ def parse_pdf(data):
                 e = df.loc[df["Sortida"] == "Sortida", col].values
                 if s.size and e.size and re.fullmatch(r"\d{1,2}:\d{2}", s[0]) and re.fullmatch(r"\d{1,2}:\d{2}", e[0]):
                     key = f"{date:%Y%m%d}-{s[0].replace(':','')}"
-                    shifts.append({
-                        "key": key,
-                        "date": date.isoformat(),
-                        "start": s[0],
-                        "end": e[0]
-                    })
+                    shifts.append({"key": key, "date": date.isoformat(), "start": s[0], "end": e[0]})
+
+
+
+
+
     return shifts
 
-# ---------- CALENDAR SYNC (unchanged) ----------
+# ---------- CALENDAR SYNC ----------
 def sync(creds, shifts, tz="Europe/Madrid"):
     service = build("calendar", "v3", credentials=creds, cache_discovery=False)
     now = dt.datetime.utcnow().isoformat() + "Z"
@@ -133,8 +120,7 @@ def sync(creds, shifts, tz="Europe/Madrid"):
         privateExtendedProperty="shiftUploader=1"
     ).execute().get("items", [])
 
-    by_key = {e["extendedProperties"]["private"]["key"]: e
-              for e in existing if "extendedProperties" in e}
+    by_key = {e["extendedProperties"]["private"]["key"]: e for e in existing if "extendedProperties" in e}
 
     ins = upd = dele = 0
     for s in shifts:
@@ -144,16 +130,10 @@ def sync(creds, shifts, tz="Europe/Madrid"):
             "summary": f"P {s['start']}",
             "start": {"dateTime": start_iso, "timeZone": tz},
             "end":   {"dateTime": end_iso,   "timeZone": tz},
-            "extendedProperties": {
-                "private": {"shiftUploader": "1", "key": s["key"]}
-            },
+            "extendedProperties": {"private": {"shiftUploader": "1", "key": s["key"]}},
         }
         if s["key"] in by_key:
-            service.events().patch(
-                calendarId="primary",
-                eventId=by_key[s["key"]]["id"],
-                body=body
-            ).execute()
+            service.events().patch(calendarId="primary", eventId=by_key[s["key"]]["id"], body=body).execute()
             upd += 1
             del by_key[s["key"]]
         else:
